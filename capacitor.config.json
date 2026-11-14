@@ -1,0 +1,20 @@
+{
+  "appId": "com.comicbookhistorians.pulptopanels",
+  "appName": "Understanding Superhero Comic Books",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false,
+    "allowsLinkPreview": false,
+    "backgroundColor": "#f3e9d2",
+    "preferredContentMode": "mobile"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 800,
+      "backgroundColor": "#f6c531",
+      "showSpinner": false
+    }
+  }
+}

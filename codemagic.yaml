@@ -1,0 +1,223 @@
+# Cloud build for the App Store. Everything the build needs is created from the
+# five files at the top of this repository: index.html, icon.png, splash.png,
+# package.json, capacitor.config.json. Setup steps are in README-WINDOWS.md.
+workflows:
+  ios-app-store:
+    name: iOS App Store build
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: Codemagic
+
+    environment:
+      vars:
+        BUNDLE_ID: com.comicbookhistorians.pulptopanels
+      node: 20
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Arrange files
+        script: |
+          mkdir -p www assets scripts
+          cp index.html www/index.html
+          cp icon.png assets/icon.png
+          cp splash.png assets/splash.png
+          cp splash.png assets/splash-dark.png
+          cat > scripts/postadd.js <<'EOF_JS'
+          // Runs once after `npx cap add ios`. Patches Info.plist with the settings
+          // App Store review expects, and drops in the privacy manifest.
+          // Uses a small plist parser so arrays and booleans are replaced cleanly.
+          const fs = require('fs'), path = require('path');
+          const plistPath = path.join(__dirname, '..', 'ios', 'App', 'App', 'Info.plist');
+          let src = fs.readFileSync(plistPath, 'utf8');
+
+          // --- parse the top-level <dict> into an ordered list of [key, valueXml] ---
+          const start = src.indexOf('<dict>') + 6, end = src.lastIndexOf('</dict>');
+          const body = src.slice(start, end);
+          const entries = [];
+          const tagRe = /<key>([^<]*)<\/key>\s*/g;
+          let m;
+          const positions = [];
+          while ((m = tagRe.exec(body))) positions.push({ key: m[1], valStart: m.index + m[0].length, keyStart: m.index });
+          for (let i = 0; i < positions.length; i++) {
+            const valEnd = i + 1 < positions.length ? positions[i + 1].keyStart : body.length;
+            entries.push([positions[i].key, body.slice(positions[i].valStart, valEnd).trim()]);
+          }
+          function set(key, valueXml) {
+            const e = entries.find(x => x[0] === key);
+            if (e) e[1] = valueXml; else entries.push([key, valueXml]);
+          }
+          const landscape = '<array>\n\t\t<string>UIInterfaceOrientationPortrait</string>\n\t</array>';
+          set('CFBundleDisplayName', '<string>Hero Comics</string>');
+          set('UISupportedInterfaceOrientations', landscape);
+          set('UISupportedInterfaceOrientations~ipad', landscape);
+          set('UIRequiresFullScreen', '<true/>');
+          set('UIStatusBarHidden', '<true/>');
+          set('UIViewControllerBasedStatusBarAppearance', '<false/>');
+          set('ITSAppUsesNonExemptEncryption', '<false/>');
+          set('LSApplicationCategoryType', '<string>public.app-category.games</string>');
+          set('UIDeviceFamily', '<array>\n\t\t<integer>1</integer>\n\t\t<integer>2</integer>\n\t</array>');
+          const out = src.slice(0, start) + '\n' + entries.map(([k, v]) => '\t<key>' + k + '</key>\n\t' + v).join('\n') + '\n' + src.slice(end);
+          fs.writeFileSync(plistPath, out);
+          fs.copyFileSync(path.join(__dirname, 'PrivacyInfo.xcprivacy'), path.join(__dirname, '..', 'ios', 'App', 'App', 'PrivacyInfo.xcprivacy'));
+          console.log('Info.plist patched: landscape only, full screen, status bar hidden, no non-exempt encryption, privacy manifest added.');
+          console.log('If Xcode does not show PrivacyInfo.xcprivacy under App, drag ios/App/App/PrivacyInfo.xcprivacy into the App group once (tick "Copy items if needed" off).');
+          EOF_JS
+          cat > scripts/PrivacyInfo.xcprivacy <<'EOF_PL'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          	<key>NSPrivacyTracking</key>
+          	<false/>
+          	<key>NSPrivacyTrackingDomains</key>
+          	<array/>
+          	<key>NSPrivacyCollectedDataTypes</key>
+          	<array/>
+          	<key>NSPrivacyAccessedAPITypes</key>
+          	<array>
+          		<dict>
+          			<key>NSPrivacyAccessedAPIType</key>
+          			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+          			<key>NSPrivacyAccessedAPITypeReasons</key>
+          			<array>
+          				<string>CA92.1</string>
+          			</array>
+          		</dict>
+          	</array>
+          </dict>
+          </plist>
+          EOF_PL
+      - name: Install dependencies
+        script: npm install
+      - name: Create the iOS project
+        script: |
+          npx cap add ios
+          node scripts/postadd.js
+          # Apple requires a minimum iOS version of 15 or later.
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' ios/App/App.xcodeproj/project.pbxproj
+          sed -i '' "s/platform :ios, '[0-9.]*'/platform :ios, '15.0'/" ios/App/Podfile
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET\|platform :ios" ios/App/App.xcodeproj/project.pbxproj ios/App/Podfile
+          npx capacitor-assets generate --ios
+          npx cap sync ios
+      - name: Apply signing
+        script: |
+          set -e
+          # The build makes its own signing certificate and App Store profile with
+          # the App Store Connect API key, so nothing has to be uploaded by hand.
+          # The private key is kept in the build cache so the same certificate is
+          # reused on later builds instead of creating a new one each time.
+          mkdir -p "$HOME/signkey"
+          KEY="$HOME/signkey/ios_distribution_private_key"
+          if [ ! -f "$KEY" ]; then
+            echo "No cached signing key yet, making one"
+            ssh-keygen -t rsa -b 2048 -m PEM -f "$KEY" -q -N ""
+          fi
+          echo "Distribution certificates on the Apple account right now:"
+          app-store-connect certificates list --type DISTRIBUTION IOS_DISTRIBUTION || true
+          MATCH=$(app-store-connect certificates list --type DISTRIBUTION IOS_DISTRIBUTION --certificate-key=@file:"$KEY" --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' || echo 0)
+          echo "Certificates made from the cached key: $MATCH"
+          if [ "$MATCH" = "0" ]; then
+            echo "Apple allows only a few Distribution certificates, so old ones are removed to make room."
+            IDS=$(app-store-connect certificates list --type DISTRIBUTION IOS_DISTRIBUTION --json | python3 -c 'import json,sys; [print(c["id"]) for c in json.load(sys.stdin)]' || true)
+            for id in $IDS; do
+              echo "Removing certificate $id"
+              app-store-connect certificates delete "$id" --ignore-not-found || echo "Could not remove $id (the API key may lack permission)"
+            done
+            PIDS=$(app-store-connect profiles list --type IOS_APP_STORE --json | python3 -c 'import json,sys; [print(p["id"]) for p in json.load(sys.stdin) if p.get("attributes",{}).get("profileState")!="ACTIVE"]' || true)
+            for id in $PIDS; do
+              echo "Removing invalid profile $id"
+              app-store-connect profiles delete "$id" --ignore-not-found || true
+            done
+          fi
+          if ! app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --certificate-key=@file:"$KEY"; then
+            echo ""
+            echo "Could not create the certificate or profile."
+            echo "If Apple said you already have a current Distribution certificate, open"
+            echo "https://developer.apple.com/account/resources/certificates/list and revoke the"
+            echo "Distribution certificates, then start the build again."
+            exit 1
+          fi
+          keychain initialize
+          keychain add-certificates
+          xcode-project use-profiles --project ios/App/App.xcodeproj || true
+          # Belt and braces: pin the App Store profile onto the App target by hand,
+          # so the archive never has to guess which profile to use.
+          PROFILE=""
+          for f in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision; do
+            [ -f "$f" ] || continue
+            security cms -D -i "$f" > /tmp/pp.plist
+            APPID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" /tmp/pp.plist)
+            case "$APPID" in
+              *".$BUNDLE_ID")
+                if ! /usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" /tmp/pp.plist >/dev/null 2>&1; then
+                  PROFILE="$f"; break
+                fi;;
+            esac
+          done
+          if [ -z "$PROFILE" ]; then echo "No App Store profile for $BUNDLE_ID was downloaded"; exit 1; fi
+          PP_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /tmp/pp.plist)
+          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /tmp/pp.plist)
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" /tmp/pp.plist)
+          echo "Using profile: $PP_NAME ($PP_UUID) team $TEAM_ID"
+          PBX=ios/App/App.xcodeproj/project.pbxproj
+          cat > scripts/pinprofile.js <<'EOF_PIN'
+          // Pins a provisioning profile onto every build configuration whose bundle id matches.
+          const fs = require('fs');
+          const [pbx, bid, team, name, uuid] = process.argv.slice(2);
+          let s = fs.readFileSync(pbx, 'utf8');
+          const drop = ['CODE_SIGN_STYLE', 'CODE_SIGN_IDENTITY', '"CODE_SIGN_IDENTITY[sdk=iphoneos*]"', 'DEVELOPMENT_TEAM', 'PROVISIONING_PROFILE_SPECIFIER', 'PROVISIONING_PROFILE'];
+          let count = 0;
+          s = s.replace(/buildSettings = \{([\s\S]*?)\n(\t*)\};/g, (m, body, ind) => {
+            if (!body.includes('PRODUCT_BUNDLE_IDENTIFIER = ' + bid)) return m;
+            const lines = body.split('\n').filter(l => !drop.some(k => l.trim().startsWith(k + ' =')));
+            const add = [
+              'CODE_SIGN_STYLE = Manual;',
+              'CODE_SIGN_IDENTITY = "Apple Distribution";',
+              '"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";',
+              'DEVELOPMENT_TEAM = ' + team + ';',
+              'PROVISIONING_PROFILE_SPECIFIER = "' + name + '";',
+              'PROVISIONING_PROFILE = "' + uuid + '";',
+            ].map(l => ind + '\t' + l);
+            count++;
+            return 'buildSettings = {' + lines.join('\n') + '\n' + add.join('\n') + '\n' + ind + '};';
+          });
+          fs.writeFileSync(pbx, s);
+          console.log('Pinned profile on ' + count + ' build configuration(s).');
+          if (!count) process.exit(1);
+          EOF_PIN
+          node scripts/pinprofile.js "$PBX" "$BUNDLE_ID" "$TEAM_ID" "$PP_NAME" "$PP_UUID"
+          grep -n "CODE_SIGN_STYLE\|DEVELOPMENT_TEAM\|PROVISIONING_PROFILE\|PRODUCT_BUNDLE_IDENTIFIER" "$PBX"
+          cat > "$HOME/export_options.plist" <<EOF_EO
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>uploadSymbols</key><true/>
+            <key>provisioningProfiles</key><dict>
+              <key>$BUNDLE_ID</key><string>$PP_NAME</string>
+            </dict>
+          </dict></plist>
+          EOF_EO
+      - name: Set build number
+        script: |
+          cd ios/App
+          agvtool new-version -all $BUILD_NUMBER
+          # Version shown on the App Store. Bump this for each update.
+          agvtool new-marketing-version 1.0
+      - name: Build
+        script: xcode-project build-ipa --workspace ios/App/App.xcworkspace --scheme App --export-options-plist "$HOME/export_options.plist"
+    cache:
+      cache_paths:
+        - $HOME/signkey
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

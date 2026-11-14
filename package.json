@@ -1,0 +1,19 @@
+{
+  "name": "pulp-to-panels",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Understanding Superhero Comic Books",
+  "scripts": {
+    "ios": "npx cap add ios && node scripts/postadd.js && npx capacitor-assets generate --ios && npx cap sync ios && npx cap open ios",
+    "sync": "npx cap sync ios",
+    "open": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/assets": "^3.0.5"
+  }
+}
