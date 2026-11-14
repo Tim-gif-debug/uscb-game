@@ -48,7 +48,7 @@ workflows:
             if (e) e[1] = valueXml; else entries.push([key, valueXml]);
           }
           const landscape = '<array>\n\t\t<string>UIInterfaceOrientationPortrait</string>\n\t</array>';
-          set('CFBundleDisplayName', '<string>Hero Comics</string>');
+          set('CFBundleDisplayName', '<string>Comics Tycoon</string>');
           set('UISupportedInterfaceOrientations', landscape);
           set('UISupportedInterfaceOrientations~ipad', landscape);
           set('UIRequiresFullScreen', '<true/>');
