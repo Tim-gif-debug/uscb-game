@@ -56,6 +56,7 @@ workflows:
           set('UIViewControllerBasedStatusBarAppearance', '<false/>');
           set('ITSAppUsesNonExemptEncryption', '<false/>');
           set('LSApplicationCategoryType', '<string>public.app-category.games</string>');
+          set('NSPhotoLibraryAddUsageDescription', '<string>Lets you save your result card to Photos.</string>');
           set('UIDeviceFamily', '<array>\n\t\t<integer>1</integer>\n\t\t<integer>2</integer>\n\t</array>');
           const out = src.slice(0, start) + '\n' + entries.map(([k, v]) => '\t<key>' + k + '</key>\n\t' + v).join('\n') + '\n' + src.slice(end);
           fs.writeFileSync(plistPath, out);
@@ -209,7 +210,7 @@ workflows:
           cd ios/App
           agvtool new-version -all $BUILD_NUMBER
           # Version shown on the App Store. Bump this for each update.
-          agvtool new-marketing-version 1.3
+          agvtool new-marketing-version 1.4
       - name: Build
         script: xcode-project build-ipa --workspace ios/App/App.xcworkspace --scheme App --export-options-plist "$HOME/export_options.plist"
     cache:
