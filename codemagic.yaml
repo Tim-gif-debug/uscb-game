@@ -13,7 +13,7 @@ workflows:
       vars:
         BUNDLE_ID: com.comicbookhistorians.pulptopanels
       node: 20
-      xcode: 27.2
+      xcode: latest
       cocoapods: default
     scripts:
       - name: Arrange files
