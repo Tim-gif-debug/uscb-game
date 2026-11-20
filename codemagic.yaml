@@ -13,7 +13,7 @@ workflows:
       vars:
         BUNDLE_ID: com.comicbookhistorians.pulptopanels
       node: 20
-      xcode: latest
+      xcode: 27.2
       cocoapods: default
     scripts:
       - name: Arrange files
@@ -210,7 +210,7 @@ workflows:
           cd ios/App
           agvtool new-version -all $BUILD_NUMBER
           # Version shown on the App Store. Bump this for each update.
-          agvtool new-marketing-version 1.4
+          agvtool new-marketing-version 1.5
       - name: Build
         script: xcode-project build-ipa --workspace ios/App/App.xcworkspace --scheme App --export-options-plist "$HOME/export_options.plist"
     cache:
